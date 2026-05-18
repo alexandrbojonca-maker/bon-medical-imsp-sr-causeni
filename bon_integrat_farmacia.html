@@ -416,7 +416,6 @@ if(typeof DB === 'undefined') {
 // ═══════════════════════════════════════════════════════
 let dbKeys = typeof DB !== 'undefined' ? Object.keys(DB) : [];
 let externalPriceCount = 0;
-let MANUAL_CATALOG = [];
 let MANUAL_CATALOG = []; // medicamente/materiale adăugate din catalog_manual.csv
 
 
@@ -490,9 +489,9 @@ function importManualCatalogCSV(text){
   if(rows.length < 2) throw new Error('CSV gol sau fără rânduri.');
   const header = rows[0].map(h => String(h).trim().toLowerCase());
   const idx = (names) => names.map(n => header.indexOf(n)).find(i => i >= 0);
-  const iCode = idx(['code','cod','id']);
+  const iCode = idx(['code','cod','id','item_id']);
   const iName = idx(['name','denumire','denumirea','nazvanie']);
-  const iUnit = idx(['unit','unitate','unitatea']);
+  const iUnit = idx(['unit','unitate','unitatea','moneda']);
   const iPrice = idx(['price','pret','preț','pret_unitar','preț_unitar']);
   const iQty = idx(['quantity','cantitate','qty','stoc']);
   if(iName < 0 || iPrice < 0) throw new Error('CSV trebuie să aibă minimum coloanele: name/denumire și price/pret.');
@@ -506,7 +505,7 @@ function importManualCatalogCSV(text){
     return {
       code,
       name,
-      unit: iUnit >= 0 ? String(r[iUnit] ?? '').trim() || '1 unitate' : '1 unitate',
+      unit: (iUnit >= 0 && !['MDL','LEI','EUR','USD'].includes(String(r[iUnit] ?? '').trim().toUpperCase())) ? String(r[iUnit] ?? '').trim() || '1 unitate' : '1 unitate',
       price: normNum(r[iPrice]),
       quantity: iQty >= 0 ? normNum(r[iQty]) : 0
     };
@@ -630,7 +629,8 @@ async function syncGoogleSheetNow(){
     localStorage.setItem('google_sheet_last_sync_v1', new Date().toISOString());
     updateSheetSyncStatus(`Actualizat: ${MANUAL_CATALOG.length} poziții`);
   }catch(e){
-    updateSheetSyncStatus('Eroare actualizare');
+    updateSheetSyncStatus('Eroare actualizare: ' + e.message);
+    console.error('Google Sheet sync error:', e);
   }
 }
 function syncGoogleSheetOnStart(){
