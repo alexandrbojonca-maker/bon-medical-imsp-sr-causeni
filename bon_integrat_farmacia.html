@@ -260,8 +260,30 @@ if(typeof DB === 'undefined') {
         </div>
       </div>
       <div class="hint">
-        Pentru medicamente care lipsesc din Farmacia: completați tabelul <b>catalog_manual.csv</b> în Excel, apoi încărcați-l aici. 
+        Pentru medicamente care lipsesc din Farmacia: completați tabelul <b>catalog_manual.csv</b> în Excel/Google Sheets, apoi încărcați-l aici.
         După încărcare se salvează în browser și intră automat în căutare.
+      </div>
+
+      <div style="margin-top:10px;border-top:1px solid #e8eaf0;padding-top:10px">
+        <div class="grid3">
+          <div>
+            <label>Google Sheets CSV link</label>
+            <input id="sheetCsvUrl" placeholder="Lipește linkul CSV publicat din Google Sheets">
+          </div>
+          <div>
+            <label>Status Google Sheet</label>
+            <input id="sheetSyncStatus" readonly value="Nu este conectat" style="background:#f8faff">
+          </div>
+          <div style="display:flex;align-items:end;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-success" onclick="connectGoogleSheet()">🔗 Conectează</button>
+            <button class="btn btn-secondary" onclick="syncGoogleSheetNow()">🔄 Actualizează</button>
+            <button class="btn btn-danger" onclick="disconnectGoogleSheet()">Deconectează</button>
+          </div>
+        </div>
+        <div class="hint">
+          Pentru auto-sync: în Google Sheets folosiți <b>File → Share → Publish to web → CSV</b>, apoi copiați linkul aici.
+          Datele se actualizează automat la deschiderea programului.
+        </div>
       </div>
     </div>
   </div>
@@ -394,6 +416,7 @@ if(typeof DB === 'undefined') {
 // ═══════════════════════════════════════════════════════
 let dbKeys = typeof DB !== 'undefined' ? Object.keys(DB) : [];
 let externalPriceCount = 0;
+let MANUAL_CATALOG = [];
 let MANUAL_CATALOG = []; // medicamente/materiale adăugate din catalog_manual.csv
 
 
@@ -416,6 +439,8 @@ document.addEventListener('DOMContentLoaded', () => {
   if(typeof DB === 'undefined') return;
   externalPriceCount = applyExternalPrices();
   loadManualCatalogFromStorage();
+  loadSheetSyncSettings();
+  syncGoogleSheetOnStart();
   const d = new Date();
   document.getElementById('bonDate').value =
     d.toLocaleDateString('ro-MD',{day:'2-digit',month:'2-digit',year:'numeric'}).replace(/\//g,'.');
@@ -537,6 +562,89 @@ function downloadManualTemplate(){
   a.download='catalog_manual_template.csv';
   a.click();
   URL.revokeObjectURL(a.href);
+}
+
+
+// GOOGLE SHEETS AUTO-SYNC
+function loadSheetSyncSettings(){
+  const url = localStorage.getItem('google_sheet_csv_url_v1') || '';
+  const input = document.getElementById('sheetCsvUrl');
+  if(input) input.value = url;
+  updateSheetSyncStatus(url ? 'Conectat. Se actualizează la pornire.' : 'Nu este conectat');
+}
+function updateSheetSyncStatus(text){
+  const el = document.getElementById('sheetSyncStatus');
+  if(el) el.value = text;
+}
+function normalizeGoogleCsvUrl(url){
+  url = String(url || '').trim();
+  if(!url) return '';
+  if(url.includes('output=csv') || url.includes('/pub?') || url.includes('format=csv')) return url;
+  const m = url.match(/\/spreadsheets\/d\/([^/]+)/);
+  if(m){
+    const gidMatch = url.match(/[?&]gid=(\d+)/);
+    const gid = gidMatch ? gidMatch[1] : '0';
+    return `https://docs.google.com/spreadsheets/d/${m[1]}/export?format=csv&gid=${gid}`;
+  }
+  return url;
+}
+async function fetchCsvWithFallback(url){
+  const direct = normalizeGoogleCsvUrl(url);
+  try{
+    const r = await fetch(direct, {cache:'no-store'});
+    if(!r.ok) throw new Error('HTTP ' + r.status);
+    return await r.text();
+  }catch(e){
+    const proxy = 'https://api.allorigins.win/raw?url=' + encodeURIComponent(direct);
+    const r2 = await fetch(proxy, {cache:'no-store'});
+    if(!r2.ok) throw new Error('Nu pot citi Google Sheet. Verificați că linkul este publicat ca CSV.');
+    return await r2.text();
+  }
+}
+async function connectGoogleSheet(){
+  const input = document.getElementById('sheetCsvUrl');
+  const url = normalizeGoogleCsvUrl(input ? input.value : '');
+  if(!url){ alert('Introduceți linkul CSV din Google Sheets.'); return; }
+  updateSheetSyncStatus('Se conectează...');
+  try{
+    const csv = await fetchCsvWithFallback(url);
+    importManualCatalogCSV(csv);
+    localStorage.setItem('google_sheet_csv_url_v1', url);
+    if(input) input.value = url;
+    localStorage.setItem('google_sheet_last_sync_v1', new Date().toISOString());
+    updateSheetSyncStatus(`Conectat: ${MANUAL_CATALOG.length} poziții`);
+    alert('Google Sheet conectat: ' + MANUAL_CATALOG.length + ' poziții.');
+  }catch(e){
+    updateSheetSyncStatus('Eroare conectare');
+    alert('Eroare Google Sheets: ' + e.message);
+  }
+}
+async function syncGoogleSheetNow(){
+  const url = localStorage.getItem('google_sheet_csv_url_v1') || normalizeGoogleCsvUrl(document.getElementById('sheetCsvUrl')?.value || '');
+  if(!url){ return; }
+  updateSheetSyncStatus('Actualizare...');
+  try{
+    const csv = await fetchCsvWithFallback(url);
+    importManualCatalogCSV(csv);
+    localStorage.setItem('google_sheet_csv_url_v1', normalizeGoogleCsvUrl(url));
+    localStorage.setItem('google_sheet_last_sync_v1', new Date().toISOString());
+    updateSheetSyncStatus(`Actualizat: ${MANUAL_CATALOG.length} poziții`);
+  }catch(e){
+    updateSheetSyncStatus('Eroare actualizare');
+  }
+}
+function syncGoogleSheetOnStart(){
+  const url = localStorage.getItem('google_sheet_csv_url_v1') || '';
+  if(!url) return;
+  setTimeout(() => syncGoogleSheetNow(), 600);
+}
+function disconnectGoogleSheet(){
+  if(!confirm('Deconectați Google Sheet? Catalogul manual încărcat rămâne salvat.')) return;
+  localStorage.removeItem('google_sheet_csv_url_v1');
+  localStorage.removeItem('google_sheet_last_sync_v1');
+  const input = document.getElementById('sheetCsvUrl');
+  if(input) input.value = '';
+  updateSheetSyncStatus('Nu este conectat');
 }
 
 function updateCatalogCounters(){
